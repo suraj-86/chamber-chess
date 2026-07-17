@@ -389,7 +389,7 @@ function Footer() {
         </div>
         
         <p className="footer-subtext">
-          Web Project &bull; Built with Love.
+          WEB GAME &bull; Built with Love.
         </p>
         
       </div>
