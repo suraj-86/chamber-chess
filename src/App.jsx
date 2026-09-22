@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { io } from "socket.io-client";
 
 /* ---------------------------------------------------------------------- */
 /*  Chess engine (plain JS, no dependencies)                              */
@@ -11,6 +12,10 @@ const ROOK_DIRS     = [[-1,0],[1,0],[0,-1],[0,1]];
 const PIECE_VALUE   = { P:100, N:320, B:330, R:500, Q:900, K:0 };
 const PIECE_GLYPH   = { K:"♚", Q:"♛", R:"♜", B:"♝", N:"♞", P:"♟" };
 const PIECE_NAME    = { K:"King", Q:"Queen", R:"Rook", B:"Bishop", N:"Knight", P:"Pawn" };
+
+// URL of the tiny socket.io relay server used for online 1v1 rooms (see /server).
+// Set VITE_SOCKET_URL when deploying so the frontend points at your deployed server.
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:3001";
 
 const CLOCK_PRESETS = {
   none:      null,
@@ -429,6 +434,15 @@ export default function ChessGame(){
   const [showResultPopup, setShowResultPopup] = useState(false);
   const [showResignPopup, setShowResignPopup] = useState(false);
 
+  // --- Online 1v1 (socket.io) ---
+  const [roomId, setRoomId] = useState(null);
+  const [joinCode, setJoinCode] = useState("");
+  const [onlineStatus, setOnlineStatus] = useState("idle"); // idle | waiting | joining | connected | opponent-left | error
+  const [onlineError, setOnlineError] = useState("");
+  const [socketReady, setSocketReady] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const socketRef = useRef(null);
+
   const containerRef = useRef(null);
   const audioCtxRef = useRef(null);
 
@@ -440,6 +454,11 @@ export default function ChessGame(){
     const onChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  useEffect(() => {
+    const shared = new URLSearchParams(window.location.search).get("room");
+    if (shared) { setMode("online"); setJoinCode(shared); }
   }, []);
   
   const toggleFullscreen = useCallback(() => {
@@ -468,7 +487,7 @@ export default function ChessGame(){
     return kp ? isSquareAttacked(displayed.board, kp.row, kp.col, opponentColor) : false;
   }, [displayed, turn, opponentColor]);
 
-  const finalizeMove = useCallback((from, move, promo) => {
+  const finalizeMove = useCallback((from, move, promo, fromRemote=false) => {
     setPast(prev => [...prev, {
       board, turn, castling: cloneCastling(castling), enPassant,
       captured: cloneCaptured(captured), history:[...history], lastMove, gameOver,
@@ -528,11 +547,15 @@ export default function ChessGame(){
     else playSound("move", soundOn, audioCtxRef);
 
     if (result) setGameOver(result);
-  }, [board, castling, turn, enPassant, captured, history, lastMove, gameOver, clocks, clockPreset, positions, soundOn]);
+
+    if (mode==="online" && !fromRemote && socketRef.current) {
+      socketRef.current.emit("move", { roomId, from, move, promo });
+    }
+  }, [board, castling, turn, enPassant, captured, history, lastMove, gameOver, clocks, clockPreset, positions, soundOn, mode, roomId]);
 
   const handleSquareClick = useCallback((r, c) => {
     if (!atLive || gameOver || pendingPromo || aiThinking || showResignPopup) return;
-    if (mode==="ai" && turn!==playerColor) return;
+    if ((mode==="ai" || mode==="online") && turn!==playerColor) return;
     const piece = board[r][c];
 
     if (selected){
@@ -619,7 +642,7 @@ export default function ChessGame(){
     return p ? { w: p.minutes*60, b: p.minutes*60 } : null;
   };
 
-  const resetLiveState = () => {
+  const resetLiveState = (presetOverride) => {
     setBoard(initialBoard());
     setTurn("w");
     setCastling(defaultCastling());
@@ -633,7 +656,7 @@ export default function ChessGame(){
     setPast([]);
     setPositions([{ board: initialBoard(), captured:{w:[],b:[]}, lastMove:null }]);
     setViewIndex(null);
-    setClocks(buildInitialClocks(clockPreset));
+    setClocks(buildInitialClocks(presetOverride ?? clockPreset));
     setAiThinking(false);
   };
 
@@ -653,6 +676,105 @@ export default function ChessGame(){
       setGameStarted(false);
     }
   };
+
+  // --- Online 1v1 helpers ---
+  const extractRoomCode = (input) => {
+    const trimmed = (input || "").trim();
+    try {
+      const u = new URL(trimmed);
+      const r = u.searchParams.get("room");
+      if (r) return r;
+    } catch { /* not a full URL, treat as a raw code */ }
+    return trimmed;
+  };
+
+  const disconnectOnline = () => {
+    socketRef.current?.disconnect();
+    socketRef.current = null;
+    setSocketReady(false);
+    setRoomId(null);
+    setOnlineStatus("idle");
+    setOnlineError("");
+    setJoinCode("");
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("room")) {
+      url.searchParams.delete("room");
+      window.history.replaceState({}, "", url);
+    }
+  };
+
+  const createOnlineRoom = () => {
+    setOnlineError("");
+    setOnlineStatus("waiting");
+    const s = io(SOCKET_URL);
+    socketRef.current = s;
+    s.on("connect_error", () => { setOnlineError("Couldn't reach the multiplayer server."); setOnlineStatus("error"); });
+    s.emit("create-room", { clockPreset }, (res) => {
+      if (!res || res.error) { setOnlineError(res?.error || "Couldn't create a room."); setOnlineStatus("error"); return; }
+      setRoomId(res.roomId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("room", res.roomId);
+      window.history.replaceState({}, "", url);
+    });
+    setSocketReady(true);
+  };
+
+  const joinOnlineRoom = () => {
+    const code = extractRoomCode(joinCode);
+    if (!code) return;
+    setOnlineError("");
+    setOnlineStatus("joining");
+    const s = io(SOCKET_URL);
+    socketRef.current = s;
+    s.on("connect_error", () => { setOnlineError("Couldn't reach the multiplayer server."); setOnlineStatus("error"); });
+    s.emit("join-room", { roomId: code }, (res) => {
+      if (!res || res.error) { setOnlineError(res?.error || "Couldn't join that room."); setOnlineStatus("error"); return; }
+      setRoomId(code.toUpperCase());
+    });
+    setSocketReady(true);
+  };
+
+  const copyOnlineLink = () => {
+    const link = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+    navigator.clipboard?.writeText(link).then(() => {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 1500);
+    });
+  };
+
+  // Attach/refresh the socket listeners that need up-to-date closures
+  // (the current move-applying function, color, clock preset, etc).
+  useEffect(() => {
+    if (!socketReady || !socketRef.current) return;
+    const s = socketRef.current;
+
+    const onOpponentMove = ({ from, move, promo }) => finalizeMove(from, move, promo, true);
+    const onOpponentResigned = () => setGameOver({ winner: playerColor, reason: "resignation" });
+    const onOpponentLeft = () => setOnlineStatus("opponent-left");
+    const onRoomStart = ({ color, clockPreset: cp }) => {
+      ensureAudioCtx(audioCtxRef);
+      setPlayerColor(color);
+      if (cp) setClockPreset(cp);
+      resetLiveState(cp || clockPreset);
+      setGameStarted(true);
+      setOnlineStatus("connected");
+      setTimeout(() => playSound("start", soundOn, audioCtxRef), 50);
+    };
+
+    s.on("opponent-move", onOpponentMove);
+    s.on("opponent-resigned", onOpponentResigned);
+    s.on("opponent-left", onOpponentLeft);
+    s.on("room-start", onRoomStart);
+    return () => {
+      s.off("opponent-move", onOpponentMove);
+      s.off("opponent-resigned", onOpponentResigned);
+      s.off("opponent-left", onOpponentLeft);
+      s.off("room-start", onRoomStart);
+    };
+  }, [socketReady, finalizeMove, playerColor, clockPreset, soundOn]);
+
+  // Always drop the connection when leaving the page entirely.
+  useEffect(() => () => { socketRef.current?.disconnect(); }, []);
 
   const kingInCheckSquare = (atLive && inCheck && !gameOver) ? findKing(board, turn) : null;
   const matDiff = materialDiff(displayed.board);
@@ -676,12 +798,69 @@ export default function ChessGame(){
                 <span className="option-title">Local Two Player</span>
                 <span className="option-sub">Pass and play on one board</span>
               </button>
-              <button className={`option-card ${mode==="ai"?"active":""}`} onClick={() => setMode("ai")}>
+              <button className={`option-card ${mode==="ai"?"active":""}`} onClick={() => { if (onlineStatus!=="idle") disconnectOnline(); setMode("ai"); }}>
                 <span className="option-title">Play vs Computer</span>
                 <span className="option-sub">A minimax engine opponent</span>
               </button>
+              <button className={`option-card ${mode==="online"?"active":""}`} onClick={() => setMode("online")}>
+                <span className="option-title">Play Online</span>
+                <span className="option-sub">Share a link, 1v1 in real time</span>
+              </button>
             </div>
           </div>
+
+          {mode==="online" && (
+            <div className="setup-section">
+              <div className="setup-label">Play Online</div>
+
+              {onlineStatus==="idle" && (
+                <>
+                  <div className="option-row">
+                    <button className="new-game-btn" style={{flex:"1 1 220px"}} onClick={createOnlineRoom}>
+                      Create Room &amp; Get Link
+                    </button>
+                  </div>
+                  <div className="online-join-row">
+                    <input
+                      className="online-code-input"
+                      placeholder="Paste invite link or room code"
+                      value={joinCode}
+                      onChange={(e) => setJoinCode(e.target.value)}
+                      onKeyDown={(e) => { if (e.key==="Enter") joinOnlineRoom(); }}
+                    />
+                    <button className="ghost-btn" onClick={joinOnlineRoom} disabled={!joinCode.trim()}>Join</button>
+                  </div>
+                </>
+              )}
+
+              {onlineStatus==="waiting" && roomId && (
+                <div className="online-waiting">
+                  <div className="online-join-row">
+                    <input
+                      className="online-code-input"
+                      readOnly
+                      value={`${window.location.origin}${window.location.pathname}?room=${roomId}`}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <button className="ghost-btn" onClick={copyOnlineLink}>{linkCopied ? "Copied!" : "Copy Link"}</button>
+                  </div>
+                  <div className="online-status-line">Waiting for your opponent to open the link…</div>
+                  <button className="ghost-btn tiny" onClick={disconnectOnline}>Cancel</button>
+                </div>
+              )}
+
+              {onlineStatus==="joining" && (
+                <div className="online-status-line">Joining room {joinCode ? extractRoomCode(joinCode) : ""}…</div>
+              )}
+
+              {onlineStatus==="error" && (
+                <div className="online-status-line error">
+                  {onlineError}
+                  <button className="ghost-btn tiny" onClick={disconnectOnline} style={{marginLeft:10}}>Try Again</button>
+                </div>
+              )}
+            </div>
+          )}
 
           {mode==="ai" && (
             <>
@@ -733,7 +912,9 @@ export default function ChessGame(){
             </div>
           </div>
 
-          <button className="new-game-btn start-btn" onClick={handleStart}>Start Game</button>
+          {mode!=="online" && (
+            <button className="new-game-btn start-btn" onClick={handleStart}>Start Game</button>
+          )}
         </div>
         
         <Footer />
@@ -747,7 +928,11 @@ export default function ChessGame(){
 
       <div className="cg-header">
         <div className="cg-eyebrow">
-          {mode==="ai" ? `You (${playerColor==="w"?"White":"Black"}) vs Computer · ${aiDifficulty[0].toUpperCase()+aiDifficulty.slice(1)}` : "Two Player · Local Board"}
+          {mode==="ai"
+            ? `You (${playerColor==="w"?"White":"Black"}) vs Computer · ${aiDifficulty[0].toUpperCase()+aiDifficulty.slice(1)}`
+            : mode==="online"
+            ? `Online · You are ${playerColor==="w"?"White":"Black"}${onlineStatus==="opponent-left" ? " · Opponent disconnected" : ""}`
+            : "Two Player · Local Board"}
         </div>
         <h1 className="cg-title">Cham<em>ber</em> Chess</h1>
       </div>
@@ -807,6 +992,7 @@ export default function ChessGame(){
                   {gameOver.reason === "checkmate" && "Checkmate!"}
                   {gameOver.reason === "stalemate" && "Draw"}
                   {gameOver.reason === "timeout" && "Time's up!"}
+                  {gameOver.reason === "resignation" && "Resigned"}
                 </div>
               </div>
             )}
@@ -828,6 +1014,9 @@ export default function ChessGame(){
           {aiThinking && atLive && !gameOver && (
             <div className="thinking-banner">Computer is thinking…</div>
           )}
+          {mode==="online" && onlineStatus==="opponent-left" && !gameOver && (
+            <div className="thinking-banner">Opponent disconnected</div>
+          )}
         </div>
 
         <div className="side-panel">
@@ -843,6 +1032,7 @@ export default function ChessGame(){
                 {gameOver.reason==="checkmate" && `Checkmate — ${gameOver.winner==="w" ? "White" : "Black"} wins`}
                 {gameOver.reason==="stalemate" && "Stalemate — draw"}
                 {gameOver.reason==="timeout" && `Time's up — ${gameOver.winner==="w" ? "White" : "Black"} wins`}
+                {gameOver.reason==="resignation" && `${gameOver.winner==="w" ? "White" : "Black"} wins by resignation`}
               </div>
             )}
 
@@ -890,10 +1080,12 @@ export default function ChessGame(){
             </div>
           </div>
 
-          <div className="btn-row">
-            <button className="new-game-btn" onClick={handleRematch}>Rematch</button>
-            <button className="ghost-btn" onClick={handleUndo} disabled={past.length===0 || !!pendingPromo || aiThinking || !atLive}>Undo</button>
-          </div>
+          {mode!=="online" && (
+            <div className="btn-row">
+              <button className="new-game-btn" onClick={handleRematch}>Rematch</button>
+              <button className="ghost-btn" onClick={handleUndo} disabled={past.length===0 || !!pendingPromo || aiThinking || !atLive}>Undo</button>
+            </div>
+          )}
           <div className="btn-row">
             <button className="ghost-btn" onClick={handleMenu}>Menu</button>
             <button className="ghost-btn" onClick={toggleFullscreen}>{isFullscreen ? "Exit Fullscreen" : "Fullscreen"}</button>
@@ -931,6 +1123,10 @@ export default function ChessGame(){
               <button 
                 className="new-game-btn" 
                 onClick={() => { 
+                  if (mode==="online" && socketRef.current && roomId) {
+                    socketRef.current.emit("resign", { roomId });
+                  }
+                  if (mode==="online") disconnectOnline();
                   setShowResignPopup(false); 
                   setGameStarted(false); 
                 }}
@@ -1339,4 +1535,20 @@ const SHARED_CSS = `
     font-family: 'JetBrains Mono', monospace;
     margin: 0;
   }
+
+  .online-join-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .online-code-input {
+    flex: 1 1 220px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--cream);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+  }
+  .online-code-input:focus { outline: none; border-color: var(--brass-light); }
+  .online-waiting { display: flex; flex-direction: column; gap: 10px; }
+  .online-status-line { font-size: 13px; color: var(--brass-light); }
+  .online-status-line.error { color: #d97575; }
 `;
