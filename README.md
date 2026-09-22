@@ -1,44 +1,84 @@
-# React + Vite
+# ♟️ Chamber Chess
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+*A quiet game of chess.*
 
-Currently, two official plugins are available:
+Chamber Chess is a full chess implementation built from scratch in React — no chess engine library, no backend, just a hand-written rules engine, a clean brass-and-cream board, and (now) a way to play someone in real time from wherever they are. It's the kind of project that looks simple until you realize every legal move, every checkmate, every en passant capture is being worked out by hand in plain JavaScript.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+**[Play it live →](#)** *https://chamber-chess.vercel.app/*
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## ✨ Features
 
-## Expanding the ESLint configuration
+**A real chess engine, not a chessboard skin**
+- Full legal move generation for every piece, including the rules people usually forget to implement: castling (both sides, with rights correctly revoked), en passant, and pawn promotion with a piece picker
+- Check, checkmate, and stalemate detection, with the king's square highlighted when it's in danger
+- A running material advantage readout, so you always know who's ahead and by how much
+- Full move history in algebraic-style notation, with the ability to step back through any past position
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+**Three ways to play**
+- **Local Two Player** — pass-and-play on one board, perfect for two people on the same screen
+- **vs Computer** — a minimax engine with alpha-beta pruning across Easy, Medium, and Hard difficulty, playing either color
+- **Play Online** — create a room, share the link, and play a live 1v1 with anyone, anywhere (see below)
 
-## Online 1v1 (socket.io)
+**Built to actually feel good to play**
+- Configurable time controls — Bullet, Blitz, Rapid, Classical, or Fischer increment — with live countdown clocks
+- Undo, rematch, and a resign/menu flow with confirmation, so you never lose a game by a stray click
+- Move and capture sound effects, check/checkmate cues, a fullscreen mode, and a responsive board that holds up on mobile
+- A distinct, considered visual identity — brass tones, serif headings, a "quiet game" mood — instead of the default chess-app look
 
-The app now has an "Play Online" mode: create a room to get a shareable link, send it to a friend, and play a live 1v1. It uses a small socket.io relay server in `/server` that just passes moves between the two players — no chess logic runs server-side, the same hand-written engine already in `src/App.jsx` validates everything locally on both ends.
+---
 
-### Run it locally
+## ♟️ Play Online
+
+Pick **Play Online** from the menu and either:
+- **Create a Room** to get a shareable link — send it to whoever you want to play, and the match begins the moment they open it, or
+- **Paste an invite link or room code** someone sent you to join theirs
+
+Behind the scenes this uses a small, deliberately simple [socket.io](https://socket.io) relay server (`/server`). It doesn't referee the game — it just introduces two players and passes their moves back and forth. All the actual chess logic (legality, check, checkmate) is the same engine already running the rest of the app, validated independently on both sides. That keeps the server tiny, fast, and easy to run anywhere.
+
+---
+
+## 🛠️ Tech Stack
+
+| | |
+|---|---|
+| **Frontend** | React 19, Vite |
+| **Chess engine** | Hand-written — no chess.js or similar, every rule implemented directly |
+| **Online play** | socket.io (client + a small Express relay server) |
+| **Styling** | Hand-crafted CSS, no framework |
+| **Deployment** | Vercel (frontend) + any Node host (multiplayer server) |
+
+---
+
+## 🚀 Getting Started
 
 ```bash
-# terminal 1 — the relay server
-cd server
-npm install
-npm start          # listens on http://localhost:3001
-
-# terminal 2 — the app
+git clone https://github.com/suraj-86/chamber-chess.git
+cd chamber-chess
 npm install
 npm run dev
 ```
 
-By default the frontend talks to `http://localhost:3001`. To point it at a different server, set `VITE_SOCKET_URL` (e.g. in a `.env` file):
+Open the printed local URL and start playing. For the online multiplayer feature, see [Play Online](#-play-online) above.
+
+---
+
+## 📁 Project Structure
 
 ```
-VITE_SOCKET_URL=https://your-deployed-server.example.com
+chamber-chess/
+├── src/
+│   ├── App.jsx        # the whole game: engine, UI, state — one focused file
+│   ├── main.jsx
+│   └── index.css
+├── server/             # socket.io relay server for online 1v1
+│   ├── index.js
+│   └── package.json
+├── public/
+└── vercel.json
 ```
 
-### Deploying
+---
 
-- **Frontend** — deploys as-is on Vercel (unchanged, `vercel.json` already handles the SPA rewrite). Just set the `VITE_SOCKET_URL` environment variable in your Vercel project settings to your deployed server's URL.
-- **Server** — `server/` is a plain Node/Express/socket.io app, so it doesn't run on Vercel's serverless functions (websockets need a persistent process). Deploy it to something like [Render](https://render.com), [Railway](https://railway.app), or [Fly.io](https://fly.io) — free tiers work fine for this. Start command is `npm install && npm start`. Optionally set `CLIENT_ORIGIN` to your frontend's URL to lock down CORS (defaults to allowing any origin).
+Built and maintained by [@suraj-86](https://github.com/suraj-86) — a small, self-contained project that quietly does a hard thing (chess rules) properly, rather than a big project that does an easy thing loudly.
