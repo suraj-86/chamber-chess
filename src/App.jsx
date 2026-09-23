@@ -801,6 +801,12 @@ export default function ChessGame(){
 
   const kingInCheckSquare = (atLive && inCheck && !gameOver) ? findKing(board, turn) : null;
   const boardFlipped = mode==="online" && playerColor==="b";
+  const topColor = boardFlipped ? "w" : "b";
+  const bottomColor = boardFlipped ? "b" : "w";
+  const nameFor = (c) => {
+    if (mode!=="online") return null;
+    return c===playerColor ? (displayName.trim() || "You") : (opponentName || "Opponent");
+  };
   const matDiff = materialDiff(displayed.board);
   const advLeader = matDiff>0 ? "w" : matDiff<0 ? "b" : null;
   const advValue = (Math.abs(matDiff)/100).toFixed(1);
@@ -989,10 +995,12 @@ export default function ChessGame(){
 
       <div className="cg-layout">
         <div className="board-frame">
-          {clocks && (
-            <div className={`clock-row top ${turn===(boardFlipped?"w":"b") && !gameOver ? "active" : ""} ${clocks[boardFlipped?"w":"b"] < 30 ? "low" : ""}`}>
-              <span className="clock-label">{boardFlipped ? "White" : "Black"}</span>
-              <span className="clock-time">{formatClock(clocks[boardFlipped?"w":"b"])}</span>
+          {(clocks || mode==="online") && (
+            <div className={`clock-row top ${clocks && turn===topColor && !gameOver ? "active" : ""} ${clocks && clocks[topColor] < 30 ? "low" : ""}`}>
+              <span className="clock-label">
+                {topColor==="w" ? "White" : "Black"}{nameFor(topColor) ? ` · ${nameFor(topColor)}` : ""}
+              </span>
+              {clocks && <span className="clock-time">{formatClock(clocks[topColor])}</span>}
             </div>
           )}
 
@@ -1010,7 +1018,14 @@ export default function ChessGame(){
                 const isCheckSquare = kingInCheckSquare && kingInCheckSquare.row===r && kingInCheckSquare.col===c;
                 const isMoveDest = atLive && lm && lm.to.row===r && lm.to.col===c;
                 let dx=0, dy=0;
-                if (isMoveDest){ dx = lm.from.col-lm.to.col; dy = lm.from.row-lm.to.row; }
+                if (isMoveDest){
+                  dx = lm.from.col-lm.to.col;
+                  dy = lm.from.row-lm.to.row;
+                  // The animation offset is computed in board coordinates, but on a
+                  // flipped board (online, playing Black) the screen direction is
+                  // mirrored — without this, pieces slide in from the wrong side.
+                  if (boardFlipped) { dx = -dx; dy = -dy; }
+                }
                 return (
                   <div
                     key={`${r}-${c}`}
@@ -1051,10 +1066,12 @@ export default function ChessGame(){
             )}
           </div>
 
-          {clocks && (
-            <div className={`clock-row bottom ${turn===(boardFlipped?"b":"w") && !gameOver ? "active" : ""} ${clocks[boardFlipped?"b":"w"] < 30 ? "low" : ""}`}>
-              <span className="clock-label">{boardFlipped ? "Black" : "White"}</span>
-              <span className="clock-time">{formatClock(clocks[boardFlipped?"b":"w"])}</span>
+          {(clocks || mode==="online") && (
+            <div className={`clock-row bottom ${clocks && turn===bottomColor && !gameOver ? "active" : ""} ${clocks && clocks[bottomColor] < 30 ? "low" : ""}`}>
+              <span className="clock-label">
+                {bottomColor==="w" ? "White" : "Black"}{nameFor(bottomColor) ? ` · ${nameFor(bottomColor)}` : ""}
+              </span>
+              {clocks && <span className="clock-time">{formatClock(clocks[bottomColor])}</span>}
             </div>
           )}
 
